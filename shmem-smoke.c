@@ -13,6 +13,7 @@
 #include "virtgpu_drm.h"
 #include "amdgpu_virtio_proto.h"
 #include <libdrm/drm.h>
+#include "amdgpu_drm.h"
 // #include <linux/drm.h>
 
 static char drm_device[] = "/dev/dri/renderD128";
@@ -30,6 +31,14 @@ typedef struct _drm_shmem_somke
 {
     char *drm_device;
     int fd;
+
+    unsigned long seqno; //TODO: shoule be atomic
+    unsigned long blob_id; //TODO: shoule be atomic
+
+    int test_times;
+    size_t read_delay;
+    int mem_type;
+    size_t mem_size;
 } drm_shmem_somke_t;
 
 typedef struct _drm_bo
@@ -110,32 +119,44 @@ static int drm_shmem_somke_init(drm_shmem_somke_t *d)
     return 0;
 }
 
-static drm_bo_t *drm_shmem_somke_alloc_shmem(drm_shmem_somke_t *test, size_t size)
+static drm_bo_t *drm_shmem_somke_alloc_shmem(drm_shmem_somke_t *test, size_t size, int mem_type)
 {
     int ret;
     uint32_t res_id;
     void *shmem_addr;
 
+    if (mem_type != AMDGPU_GEM_DOMAIN_SH_MEM && mem_type !=AMDGPU_GEM_DOMAIN_GTT)
+    {
+        fprintf(stderr, "unsupport mem type: %d\n", mem_type);
+        return NULL;
+    }
+
     struct drm_virtgpu_resource_create_blob args = {
         .blob_mem = VIRTGPU_BLOB_MEM_HOST3D,
         .size = size,
     };
-    args.blob_id = 0; // shmem blob_id must be 0
+    args.blob_id = mem_type == AMDGPU_GEM_DOMAIN_SH_MEM ? 0 : ++test->blob_id; // shmem blob_id must be 0
     args.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
 
-    // struct amdgpu_ccmd_gem_new_req req = {
-    //     .hdr = AMDGPU_CCMD(GEM_NEW, sizeof(req)),
-    // };
-    // req.r.alloc_size = size;
-    // req.r.phys_alignment = 0;
-    // req.r.preferred_heap = AMDGPU_GEM_DOMAIN_SH_MEM;
-    // //    req.r.flags = request->flags;
-    // req.vm_map_size = size;
+    struct amdgpu_ccmd_gem_new_req req = {
+        .hdr = AMDGPU_CCMD(GEM_NEW, sizeof(req)),
+    };
+    req.r.alloc_size = size;
+    req.r.phys_alignment = 0;
+    req.r.preferred_heap = AMDGPU_GEM_DOMAIN_GTT;
+    req.r.flags = AMDGPU_GEM_PIN_ON_MMAP;
+    req.vm_map_size = size;
+    req.blob_id = args.blob_id;
+
+    if (mem_type != AMDGPU_GEM_DOMAIN_SH_MEM)
+    {
+        args.cmd = (uintptr_t)&req;
+        args.cmd_size = sizeof(req);
+        req.hdr.seqno = ++test->seqno;
+    }
 
     drm_bo_t *bo = calloc(1, sizeof(drm_bo_t));
     bo->size = size;
-    // args.cmd = (uintptr_t)&req;
-    // args.cmd_size = sizeof(req);
     ret = virtio_ioctl(test->fd, VIRTGPU_RESOURCE_CREATE_BLOB, &args);
 
     // No fence sync in this test
@@ -208,7 +229,7 @@ void write_random_numbers(void *buf, size_t size)
     static int rand_add = 1;
     srand(time(NULL) + rand_add++);
 
-    int *buf2 = (int*)buf;
+    int *buf2 = (int *)buf;
 
     while (i < (size / sizeof(int)))
     {
@@ -233,21 +254,21 @@ void dump_memory(void *buf, size_t size)
                 printf("\n");
             printf("%p: ", buf + i);
         }
-        printf("%02X ", ((unsigned char*)buf)[i]);
+        printf("%02X ", ((unsigned char *)buf)[i]);
 
         i++;
     }
     printf("\n");
 }
 
-int find_memory_dismatch(void* m1, void* m2)
+int find_memory_dismatch(void *m1, void *m2)
 {
     bool match = true;
     int i = 0;
 
-    while(match)
+    while (match)
     {
-        if(memcmp(m1 + i, m2 + i, sizeof(int)))
+        if (memcmp(m1 + i, m2 + i, sizeof(int)))
         {
             return i;
         }
@@ -295,7 +316,7 @@ static int drm_shmem_somke_random_write_read_test(drm_bo_t *bo, int times, size_
         i++;
         if (i >= times && times != -1)
             run = 0;
-        
+
         // if (i % 1000 == 0)
         //     printf("runnning test, times: %d\n", i);
     }
@@ -305,7 +326,54 @@ static int drm_shmem_somke_random_write_read_test(drm_bo_t *bo, int times, size_
     free(rand_buffer);
 }
 
-int main()
+extern char *optarg;
+static int get_opt(int argc, char *argv[], int *times, size_t *read_delay, int *mem_type, size_t *size)
+{
+    char *optstring = "t:d:m:hs:";
+    int opt;
+
+    while ((opt = getopt(argc, argv, optstring)) != -1)
+    {
+        switch (opt)
+        {
+        case 't':
+            *times = atoi(optarg);
+            printf("test times: %d\n", *times);
+            break;
+
+        case 'd':
+            *read_delay = atoi(optarg);
+            printf("read delay: %ld\n", *read_delay);
+            break;
+
+        case 'm':
+            *mem_type = atoi(optarg);
+            printf("mem type: %d\n", *mem_type);
+            break;
+
+        case 's':
+            *size = atoi(optarg);
+            printf("mem size: %ld\n", *size);
+            break;
+
+        case 'h':
+            printf("-t  the run times for test\n-d  read delay after write memory\n-m  memory type, GTT: 2 shmem: 64\n-s  memory size, will be aligned up by 0x1000\n");
+            exit(0);
+            break;
+
+        default:
+            break;
+        }
+    }
+}
+
+static inline uint64_t
+align64(uint64_t value, unsigned alignment)
+{
+   return (value + alignment - 1) & ~((uint64_t)alignment - 1);
+}
+
+int main(int argc, char *argv[])
 {
     int rc = 0;
     drm_bo_t *bo;
@@ -319,6 +387,18 @@ int main()
         return -1;
     }
 
+    drm_shmem_test->mem_type = AMDGPU_GEM_DOMAIN_SH_MEM; // default shmem
+    drm_shmem_test->mem_size = 0x4000;
+
+    get_opt(argc, argv, &drm_shmem_test->test_times,
+            &drm_shmem_test->read_delay,
+            &drm_shmem_test->mem_type,
+            &drm_shmem_test->mem_size);
+    
+    drm_shmem_test->mem_size = align64(drm_shmem_test->mem_size, 0x1000);
+
+    printf("mem size aligned: 0x%lx\n", drm_shmem_test->mem_size);
+
     rc = drm_shmem_somke_init(drm_shmem_test);
     if (rc)
     {
@@ -326,7 +406,7 @@ int main()
         return -1;
     }
 
-    bo = drm_shmem_somke_alloc_shmem(drm_shmem_test, 0x4000);
+    bo = drm_shmem_somke_alloc_shmem(drm_shmem_test, drm_shmem_test->mem_size, drm_shmem_test->mem_type);
     if (!bo)
     {
         fprintf(stderr, "alloc drm shmem failed\n");
@@ -335,7 +415,7 @@ int main()
 
     // show_bo_param(bo);
 
-    drm_shmem_somke_random_write_read_test(bo, 10000, 0, bo->size);
+    drm_shmem_somke_random_write_read_test(bo, drm_shmem_test->test_times, drm_shmem_test->read_delay, bo->size);
 
     free(drm_shmem_test);
     free(bo);

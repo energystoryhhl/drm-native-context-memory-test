@@ -159,11 +159,11 @@ extern "C" {
  */
 #define AMDGPU_GEM_CREATE_UNCACHED		(1 << 14)
 
-#ifdef HAVE_AMDGPU_VIRTIO
+// #ifdef HAVE_AMDGPU_VIRTIO
 #define AMDGPU_GEM_PIN_ON_MMAP		    (1 << 15)
 #define AMDGPU_GEM_NOT_SHARED		    (1 << 16)
 #define AMDGPU_GEM_NO_SUB_ALLOCATION    (1 << 17)
-#endif
+// #endif
 
 struct drm_amdgpu_gem_create_in  {
 	/** the requested memory size */
