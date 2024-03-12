@@ -32,13 +32,14 @@ typedef struct _drm_shmem_somke
     char *drm_device;
     int fd;
 
-    unsigned long seqno; //TODO: shoule be atomic
-    unsigned long blob_id; //TODO: shoule be atomic
+    unsigned long seqno;   // TODO: shoule be atomic
+    unsigned long blob_id; // TODO: shoule be atomic
 
     int test_times;
     size_t read_delay;
     int mem_type;
     size_t mem_size;
+    int rewrite;
 } drm_shmem_somke_t;
 
 typedef struct _drm_bo
@@ -125,7 +126,7 @@ static drm_bo_t *drm_shmem_somke_alloc_shmem(drm_shmem_somke_t *test, size_t siz
     uint32_t res_id;
     void *shmem_addr;
 
-    if (mem_type != AMDGPU_GEM_DOMAIN_SH_MEM && mem_type !=AMDGPU_GEM_DOMAIN_GTT)
+    if (mem_type != AMDGPU_GEM_DOMAIN_SH_MEM && mem_type != AMDGPU_GEM_DOMAIN_GTT)
     {
         fprintf(stderr, "unsupport mem type: %d\n", mem_type);
         return NULL;
@@ -278,18 +279,22 @@ int find_memory_dismatch(void *m1, void *m2)
     return 0;
 }
 
-static int drm_shmem_somke_random_write_read_test(drm_bo_t *bo, int times, size_t read_delay, size_t size)
+static int drm_shmem_somke_random_write_read_test(drm_shmem_somke_t *test, drm_bo_t *bo, int times, size_t read_delay, size_t size)
 {
     void *rand_buffer = calloc(1, size);
     int i = 0;
     bool run = 1;
+    write_random_numbers(rand_buffer, size);
+    memcpy(bo->addr, rand_buffer, size);
 
     while (run)
     {
-        write_random_numbers(rand_buffer, size);
-
-        // write to shmem
-        memcpy(bo->addr, rand_buffer, size);
+        if (test->rewrite)
+        {
+            write_random_numbers(rand_buffer, size);
+            // write to shmem
+            memcpy(bo->addr, rand_buffer, size);
+        }
 
         sleep(read_delay);
 
@@ -327,9 +332,9 @@ static int drm_shmem_somke_random_write_read_test(drm_bo_t *bo, int times, size_
 }
 
 extern char *optarg;
-static int get_opt(int argc, char *argv[], int *times, size_t *read_delay, int *mem_type, size_t *size)
+static int get_opt(int argc, char *argv[], int *times, size_t *read_delay, int *mem_type, size_t *size, int *rewrite)
 {
-    char *optstring = "t:d:m:hs:";
+    char *optstring = "t:d:m:hs:w:";
     int opt;
 
     while ((opt = getopt(argc, argv, optstring)) != -1)
@@ -356,8 +361,14 @@ static int get_opt(int argc, char *argv[], int *times, size_t *read_delay, int *
             printf("mem size: %ld\n", *size);
             break;
 
+        case 'w':
+            *rewrite = atoi(optarg);
+            printf("mem rewrite: %d\n", *rewrite);
+            break;
+
         case 'h':
-            printf("-t  the run times for test\n-d  read delay after write memory\n-m  memory type, GTT: 2 shmem: 64\n-s  memory size, will be aligned up by 0x1000\n");
+            printf("-t  the run times for test\n-d  read delay after write memory\n-m  memory type, GTT: 2 shmem: 64\n-s  memory size, will be aligned up by 0x1000\
+-w  if rewrite the shmem\n");
             exit(0);
             break;
 
@@ -370,7 +381,7 @@ static int get_opt(int argc, char *argv[], int *times, size_t *read_delay, int *
 static inline uint64_t
 align64(uint64_t value, unsigned alignment)
 {
-   return (value + alignment - 1) & ~((uint64_t)alignment - 1);
+    return (value + alignment - 1) & ~((uint64_t)alignment - 1);
 }
 
 int main(int argc, char *argv[])
@@ -393,8 +404,9 @@ int main(int argc, char *argv[])
     get_opt(argc, argv, &drm_shmem_test->test_times,
             &drm_shmem_test->read_delay,
             &drm_shmem_test->mem_type,
-            &drm_shmem_test->mem_size);
-    
+            &drm_shmem_test->mem_size,
+            &drm_shmem_test->rewrite);
+
     drm_shmem_test->mem_size = align64(drm_shmem_test->mem_size, 0x1000);
 
     printf("mem size aligned: 0x%lx\n", drm_shmem_test->mem_size);
@@ -415,7 +427,7 @@ int main(int argc, char *argv[])
 
     // show_bo_param(bo);
 
-    drm_shmem_somke_random_write_read_test(bo, drm_shmem_test->test_times, drm_shmem_test->read_delay, bo->size);
+    drm_shmem_somke_random_write_read_test(drm_shmem_test, bo, drm_shmem_test->test_times, drm_shmem_test->read_delay, bo->size);
 
     free(drm_shmem_test);
     free(bo);
