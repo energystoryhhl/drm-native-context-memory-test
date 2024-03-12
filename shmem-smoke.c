@@ -367,7 +367,7 @@ static int get_opt(int argc, char *argv[], int *times, size_t *read_delay, int *
             break;
 
         case 'h':
-            printf("-t  the run times for test\n-d  read delay after write memory\n-m  memory type, GTT: 2 shmem: 64\n-s  memory size, will be aligned up by 0x1000\
+            printf("-t  the run times for test\n-d  read delay after write memory\n-m  memory type, GTT: 2 shmem: 64\n-s  memory size, will be aligned up by 0x1000\n\
 -w  if rewrite the shmem\n");
             exit(0);
             break;
