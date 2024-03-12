@@ -284,7 +284,7 @@ static int drm_shmem_somke_random_write_read_test(drm_bo_t *bo, int times, size_
             dump_memory(bo->addr + loc, 0x10);
 
             getchar();
-            break;
+            return -1;
         }
         else
         {
