@@ -319,8 +319,11 @@ static int drm_shmem_somke_random_write_read_test(drm_shmem_somke_t *test, drm_b
         }
 
         i++;
-        if (i >= times && times != -1)
+        if (i >= times)
             run = 0;
+
+        if (times == -1)
+            run = 1;
 
         // if (i % 1000 == 0)
         //     printf("runnning test, times: %d\n", i);
